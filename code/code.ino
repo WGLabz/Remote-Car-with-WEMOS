@@ -1,0 +1,185 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <WebSocketsServer.h>
+#include "index.h"        // The webpage content
+#include "WEMOS_Motor.h"  // Libabry for WEMOS Motor Shield V1
+
+#define CMD_STOP 0
+#define CMD_FORWARD 1
+#define CMD_BACKWARD 2
+#define CMD_LEFT 4
+#define CMD_RIGHT 8
+#define CMD_LIGHT 9
+#define CMD_STRAIGHT 3
+#define CMD_SPEEDUP 6
+#define CMD_SPEEDDOWN 7
+
+Motor SM(0x30, _MOTOR_A, 1000);  //Steering Motor
+Motor DM(0x30, _MOTOR_B, 1000);  // Drive Motor
+
+const char* ssid = "home_wg";         // CHANGE IT
+const char* password = "omisoksbwn";  // CHANGE IT
+
+ESP8266WebServer server(80);                        // Web server on port 80
+WebSocketsServer webSocket = WebSocketsServer(81);  // WebSocket server on port 81
+int ledPin = D5;
+char sbat[120];
+int speed = 30;
+bool movingForward = false;
+bool movingBackward = false;
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_DISCONNECTED:
+      Serial.printf("[%u] Disconnected!\n", num);
+      break;
+    case WStype_CONNECTED:
+      {
+        IPAddress ip = webSocket.remoteIP(num);
+        Serial.printf("[%u] Connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
+      }
+      break;
+    case WStype_TEXT:
+      //Serial.printf("[%u] Received text: %s\n", num, payload);
+      String angle = String((char*)payload);
+      int command = angle.toInt();
+      Serial.print("command: ");
+      Serial.println(command);
+
+      switch (command) {
+        case CMD_STOP:
+          Serial.println("Stop");
+          CAR_stop();
+          break;
+        case CMD_FORWARD:
+          Serial.println("Move Forward");
+          CAR_moveForward();
+          break;
+        case CMD_BACKWARD:
+          Serial.println("Move Backward");
+          CAR_moveBackward();
+          break;
+        case CMD_LEFT:
+          Serial.println("Turn Left");
+          CAR_turnLeft();
+          break;
+        case CMD_RIGHT:
+          Serial.println("Turn Right");
+          CAR_turnRight();
+          break;
+        case CMD_STRAIGHT:
+          Serial.println("Stright");
+          CAR_straight();
+          break;
+        case CMD_LIGHT:
+          Serial.println("light chnage");
+          CAR_lightToggle();
+          break;
+        case CMD_SPEEDUP:
+          Serial.println("speed Up");
+          CAR_speedup();
+          break;
+        case CMD_SPEEDDOWN:
+          Serial.println("Speed down");
+          CAR_speeddown();
+          break;
+        default:
+          Serial.println("Unknown command");
+      }
+      float voltage = (((analogRead(A0) * 3.3) / 1024) * 2 + .33);
+      float bat_percentage = mapfloat(voltage, 2.8, 4.2, 0, 100);
+      sprintf(sbat, "{\"voltage\":%f,\"per\": %f,\"speed\": %d, \"light\":%d }", voltage, bat_percentage, speed,digitalRead(ledPin));
+
+      webSocket.sendTXT(num, sbat);
+      break;
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+
+
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi");
+  // pinMode(A0);
+  // Initialize WebSocket server
+  webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
+
+  // Serve a basic HTML page with JavaScript to create the WebSocket connection
+  server.on("/", HTTP_GET, []() {
+    Serial.println("Web Server: received a web page request");
+    String html = HTML_CONTENT;  // Use the HTML content from the servo_html.h file
+    server.send(200, "text/html", html);
+  });
+
+  server.begin();
+  Serial.print("ESP8266 Web Server's IP address: ");
+  Serial.println(WiFi.localIP());
+  pinMode(ledPin, OUTPUT);
+}
+float mapfloat(float x, float in_min, float in_max, float out_min, float out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+void loop() {
+  // Handle client requests
+  server.handleClient();
+
+  // Handle WebSocket events
+  webSocket.loop();
+  // TO DO: Your code here
+}
+
+void CAR_moveForward() {
+  movingForward = true;
+  DM.setmotor(_CW, speed);
+}
+
+void CAR_moveBackward() {
+  movingBackward = true;
+  DM.setmotor(_CCW, speed);
+}
+
+void CAR_turnLeft() {
+  SM.setmotor(_CCW, 100);
+}
+
+void CAR_turnRight() {
+  SM.setmotor(_CW, 100);
+}
+
+void CAR_stop() {
+  movingForward = false;
+  movingBackward = false;
+  DM.setmotor(_STOP);
+  SM.setmotor(_STOP);
+}
+void CAR_straight() {
+  SM.setmotor(_STOP);
+}
+void CAR_lightToggle() {
+  if (digitalRead(ledPin)) {
+    digitalWrite(ledPin, 0);
+  } else
+    digitalWrite(ledPin, 1);
+}
+void CAR_speedup() {
+  speed++;
+  updateSpeed();
+}
+void CAR_speeddown() {
+  speed--;
+  updateSpeed();
+}
+void updateSpeed() {
+
+  if (movingForward)
+    DM.setmotor(_CW, speed);
+  if (movingBackward)
+    DM.setmotor(_CCW, speed);
+}
